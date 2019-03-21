@@ -10,7 +10,7 @@ pub use error::Error;
 pub use event::Event;
 
 use crate::wire_msg::WireMsg;
-use context::{ctx, ctx_mut, initialise_ctx, Context};
+use context::{ctx, ctx_mut, initialise_ctx, is_ctx_initialised, Context};
 use event_loop::EventLoop;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::mpsc::{self, Sender};
@@ -187,7 +187,21 @@ impl Crust {
             return Ok(our_global_info.clone());
         }
 
-        let our_ext_addr = self.query_ip_echo_service()?;
+        let our_ext_addr = match self.query_ip_echo_service() {
+            Err(Error::NoEndpointEchoServerFound) => {
+                let (tx, rx) = mpsc::channel();
+                self.el.post(move || {
+                    let r = if is_ctx_initialised() {
+                        ctx(|ctx| ctx.quic_ep().local_addr().ok())
+                    } else {
+                        None
+                    };
+                    unwrap!(tx.send(r));
+                });
+                rx.recv().unwrap_or(None).ok_or(Error::ListenerNotInitialised)?
+            }
+            r => r?,
+        };
         let our_cert_der = self.our_certificate_der();
 
         let our_global_info = CrustInfo {

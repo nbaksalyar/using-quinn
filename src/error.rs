@@ -37,5 +37,8 @@ quick_error! {
          NoEndpointEchoServerFound {
              display("There's no endpoint echo server with a Global Address to ask.")
          }
+         ListenerNotInitialised {
+            display("Listener is not yet initialised.")
+         }
      }
 }
