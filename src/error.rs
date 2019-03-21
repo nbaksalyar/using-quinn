@@ -41,5 +41,8 @@ quick_error! {
              display("Oneshot Receiver error: {}", e)
              from()
          }
+         ListenerNotInitialised {
+            display("Listener is not yet initialised.")
+         }
      }
 }
