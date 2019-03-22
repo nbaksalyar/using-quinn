@@ -11,8 +11,6 @@
 extern crate log;
 #[macro_use]
 extern crate unwrap;
-#[macro_use]
-
 extern crate serde_derive;
 mod common;
 use common::Rpc;
@@ -80,7 +78,7 @@ impl ClientNode {
         self.crust.start_listening();
         info!("Crust started");
 
-        let our_conn_info = unwrap!(self.crust.our_connection_info());
+        let our_conn_info = unwrap!(self.crust.our_global_connection_info());
         self.our_cert = our_conn_info.peer_cert_der;
 
         // this dummy send will trigger connection
