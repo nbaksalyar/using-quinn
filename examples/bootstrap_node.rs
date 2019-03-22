@@ -60,9 +60,10 @@ fn main() -> Result<(), io::Error> {
     let cfg_file_handler = FileHandler::<BootstrapNodeConfig>::new("bootstrap.config", true)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
-    let bootstrap_node_config = cfg_file_handler
-        .read_file()
-        .unwrap_or_else(|_e| BootstrapNodeConfig::default());
+    let bootstrap_node_config = cfg_file_handler.read_file().unwrap_or_else(|e| {
+        error!("Could not read config: {}; using default", e);
+        BootstrapNodeConfig::default()
+    });
 
     // Initialise Crust
     let (ev_tx, ev_rx) = channel();
