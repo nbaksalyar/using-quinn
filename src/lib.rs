@@ -4,6 +4,11 @@ extern crate quick_error;
 extern crate serde_derive;
 #[macro_use]
 extern crate unwrap;
+extern crate net2;
+#[macro_use]
+extern crate slog;
+extern crate slog_async;
+extern crate slog_term;
 
 pub use config::{Config, SerialisableCertificate};
 pub use error::Error;
@@ -12,7 +17,11 @@ pub use event::Event;
 use crate::wire_msg::WireMsg;
 use context::{ctx, ctx_mut, initialise_ctx, is_ctx_initialised, Context};
 use event_loop::EventLoop;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use net2::UdpSocketExt;
+use slog::Drain;
+use std::fs::OpenOptions;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
+use std::process;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use tokio::prelude::Future;
@@ -39,7 +48,7 @@ pub const DEFAULT_MAX_ALLOWED_MSG_SIZE: usize = 500 * 1024 * 1024; // 500MiB
 /// see no conversation between them.
 ///
 /// The value is in seconds.
-pub const DEFAULT_IDLE_TIMEOUT: u64 = 30; // 30secs
+pub const DEFAULT_IDLE_TIMEOUT: u64 = 0; // 30secs
 /// Default Interval to send keep-alives if we are idling so that the peer does not disconnect from
 /// us declaring us offline. If none is supplied we'll default to the documented constant.
 ///
@@ -127,9 +136,33 @@ impl Crust {
                 transport_config.keep_alive_interval = keep_alive_interval;
             }
 
+            let udpsock = unwrap!(UdpSocket::bind(&(ip, port)));
+            unwrap!(udpsock.set_recv_buffer_size(25 * 1024 * 1024));
+            unwrap!(udpsock.set_send_buffer_size(25 * 1024 * 1024));
+            eprintln!(
+                "recv_buf: {}, send_buf: {}",
+                unwrap!(udpsock.recv_buffer_size()),
+                unwrap!(udpsock.send_buffer_size())
+            );
+
+            let log_path = format!("using-quinn.{}.log", process::id());
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(log_path)
+                .unwrap();
+
+            let decorator = slog_term::PlainDecorator::new(file);
+            let drain = slog_term::FullFormat::new(decorator).build().fuse();
+            let drain = slog_async::Async::new(drain).build().fuse();
+
+            let logger = slog::Logger::root(drain, o!());
+
             let mut ep_builder = quinn::Endpoint::new();
-            ep_builder.listen(our_cfg);
-            let (ep, dr, incoming_connections) = unwrap!(ep_builder.bind(&(ip, port)));
+            ep_builder.listen(our_cfg).logger(logger);
+            // let (ep, dr, incoming_connections) = unwrap!(ep_builder.bind(&(ip, port)));
+            let (ep, dr, incoming_connections) = unwrap!(ep_builder.from_socket(udpsock));
 
             let ctx = Context::new(
                 tx,
@@ -198,7 +231,9 @@ impl Crust {
                     };
                     unwrap!(tx.send(r));
                 });
-                rx.recv().unwrap_or(None).ok_or(Error::ListenerNotInitialised)?
+                rx.recv()
+                    .unwrap_or(None)
+                    .ok_or(Error::ListenerNotInitialised)?
             }
             r => r?,
         };

@@ -84,6 +84,8 @@ impl ClientNode {
         info!("Crust started");
 
         let our_conn_info = unwrap!(self.crust.our_global_connection_info());
+        info!("Our CI: {:?}", our_conn_info);
+
         self.our_cert = our_conn_info.peer_cert_der;
 
         // this dummy send will trigger connection
@@ -135,6 +137,7 @@ impl ClientNode {
     }
 
     fn connect_to_peers(&mut self, peers: Vec<CrustInfo>) {
+        // debug!("Peers: {:?}", peers);
         for conn_info in peers {
             if conn_info.peer_cert_der != self.our_cert {
                 self.crust.connect_to(conn_info.clone());

@@ -13,6 +13,10 @@ serde = "*"
 serde_derive = "1.0.89"
 quick-error = "*"
 rcgen = "*"
+net2 = "0.2.33"
+slog = { version = "2.4.1", features = ["max_level_trace", "release_max_level_warn"] }
+slog-term = "2.4.0"
+slog-async = "2.3.0"
 
 [dev-dependencies]
 log = "0.4.6"

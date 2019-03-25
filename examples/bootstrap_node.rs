@@ -122,6 +122,11 @@ fn main() -> Result<(), io::Error> {
                     error!("More than expected connections received");
                 }
             }
+            Event::NewMessage { peer_addr, msg } => {
+                if msg != vec![1, 2, 3] {
+                    warn!("Unexpected message from peer {:?}: {:?}", peer_addr, msg);
+                }
+            }
             event => warn!("Unexpected event: {:?}", event),
         }
     }
