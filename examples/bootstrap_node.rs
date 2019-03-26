@@ -76,6 +76,8 @@ fn main() -> Result<(), io::Error> {
                 ev_tx,
                 Config {
                     our_complete_cert: Some(our_complete_cert),
+                    idle_timeout: Some(0),
+                    keep_alive_interval: Some(0),
                     port: Some(bootstrap_node_config.port),
                     ip: Some(IpAddr::V4(bootstrap_node_config.ip)),
                     ..Default::default()

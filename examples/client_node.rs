@@ -7,6 +7,7 @@
 //! "127.0.0.1:5000","peer_cert_der":[48,130,..]}'
 //! ```
 
+extern crate bytes;
 #[macro_use]
 extern crate log;
 #[macro_use]
@@ -15,8 +16,9 @@ extern crate unwrap;
 mod common;
 use common::Rpc;
 
-use using_quinn::{Config, Crust, CrustInfo, Event};
+use using_quinn::{Config, Crust, CrustInfo, Event, WireMsg};
 
+use bytes::Bytes;
 use clap::{self, App, Arg};
 use crc::crc32;
 use env_logger;
@@ -42,7 +44,7 @@ struct ClientNode {
     sent_messages: usize,
     received_messages: usize,
     /// Message to send
-    msg: Vec<u8>,
+    msg: Bytes,
 }
 
 fn main() {
@@ -61,16 +63,20 @@ impl ClientNode {
             event_tx,
             Config {
                 port: Some(0),
+                idle_timeout: Some(0),
+                keep_alive_interval: Some(0),
                 hard_coded_contacts: vec![bootstrap_node_info.clone()],
                 ..Default::default()
             },
         );
-        let msg = random_data_with_hash(1024 * 1024);
+        let msg = random_data_with_hash(64 * 1024);
         assert!(hash_correct(&msg));
         Self {
             crust,
             bootstrap_node_info,
-            msg,
+            msg: From::from(unwrap!(bincode::serialize(&WireMsg::UserMsg(From::from(
+                msg
+            ))))),
             event_rx: Some(event_rx),
             client_nodes: Default::default(),
             our_cert: Default::default(),
@@ -111,12 +117,12 @@ impl ClientNode {
         if peer == self.bootstrap_node_info {
             info!("Connected to bootstrap node. Waiting for other node contacts...");
         } else if self.client_nodes.contains(&peer) {
-            self.crust.send(peer, self.msg.clone());
+            self.crust.send_raw(peer, self.msg.clone());
             self.sent_messages += 1;
         }
     }
 
-    fn on_msg_receive(&mut self, peer_addr: SocketAddr, msg: Vec<u8>) {
+    fn on_msg_receive(&mut self, peer_addr: SocketAddr, msg: Bytes) {
         if self.response_from_bootstrap_node(&peer_addr) {
             let msg: Rpc = unwrap!(bincode::deserialize(&msg));
             match msg {

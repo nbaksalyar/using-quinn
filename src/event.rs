@@ -1,4 +1,5 @@
 use crate::CrustInfo;
+use bytes::Bytes;
 use std::fmt;
 use std::net::SocketAddr;
 
@@ -12,7 +13,7 @@ pub enum Event {
     },
     NewMessage {
         peer_addr: SocketAddr,
-        msg: Vec<u8>,
+        msg: Bytes,
     },
     /// No more messages will be fired after this
     // TODO Currently used only for testing

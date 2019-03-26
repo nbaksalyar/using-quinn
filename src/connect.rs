@@ -3,6 +3,7 @@ use crate::error::Error;
 use crate::event::Event;
 use crate::wire_msg::WireMsg;
 use crate::{communicate, CrustInfo, R};
+use bytes::Bytes;
 use std::mem;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -10,7 +11,7 @@ use tokio::prelude::Future;
 use tokio::runtime::current_thread;
 
 /// Connect to the give peer
-pub fn connect_to(peer_info: CrustInfo, send_after_connect: Option<WireMsg>) -> R<()> {
+pub fn connect_to(peer_info: CrustInfo, send_after_connect: Option<Bytes>) -> R<()> {
     let peer_cert = quinn::Certificate::from_der(&peer_info.peer_cert_der)?;
     let peer_addr = peer_info.peer_addr;
 
@@ -116,7 +117,7 @@ fn handle_new_connection_res(
                 communicate::write_to_peer_connection(
                     peer_addr,
                     &q_conn,
-                    WireMsg::CertificateDer(c.our_complete_cert.cert_der.clone()),
+                    WireMsg::CertificateDer(c.our_complete_cert.cert_der.clone()).into(),
                 );
             }
             FromPeer::Established {
@@ -145,7 +146,7 @@ fn handle_new_connection_res(
         }
 
         for pending_send in pending_sends {
-            communicate::write_to_peer_connection(peer_addr, &q_conn, pending_send);
+            communicate::write_to_peer_connection(peer_addr, &q_conn, pending_send.into());
         }
 
         conn.to_peer = ToPeer::Established {

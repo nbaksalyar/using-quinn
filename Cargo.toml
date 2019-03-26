@@ -5,7 +5,7 @@ authors = ["ustulation <ustulation@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-quinn = { git = "https://github.com/djc/quinn", rev = "cada5cc" }
+quinn = { path = "../quinn/quinn" }
 tokio = "*"
 unwrap = "*"
 bincode = "1.1.2"
@@ -13,6 +13,7 @@ serde = "*"
 serde_derive = "1.0.89"
 quick-error = "*"
 rcgen = "*"
+bytes = { version = "0.4.12", features = ["serde"] }
 
 [dev-dependencies]
 clap = "2.32.0"

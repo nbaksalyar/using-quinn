@@ -4,6 +4,7 @@ use crate::event::Event;
 use crate::wire_msg::WireMsg;
 use crate::R;
 use crate::{connect, CrustInfo};
+use bytes::Bytes;
 use std::net::SocketAddr;
 use std::sync::mpsc::Sender;
 use std::thread;
@@ -12,7 +13,7 @@ use tokio::runtime::current_thread;
 
 /// Send message to peer. If the peer is not connected, it will attempt to connect to it first
 /// and then send the message
-pub fn try_write_to_peer(peer_info: CrustInfo, msg: WireMsg) {
+pub fn try_write_to_peer(peer_info: CrustInfo, msg: Bytes) {
     let connect_and_send = ctx_mut(|c| {
         let peer_addr = peer_info.peer_addr;
         let event_tx = c.event_tx.clone();
@@ -71,7 +72,7 @@ pub fn write_to_peer(peer_addr: SocketAddr, msg: WireMsg) {
             }
         };
 
-        write_to_peer_connection(peer_addr, q_conn, msg);
+        write_to_peer_connection(peer_addr, q_conn, msg.into());
     })
 }
 
@@ -79,7 +80,7 @@ pub fn write_to_peer(peer_addr: SocketAddr, msg: WireMsg) {
 pub fn write_to_peer_connection(
     peer_addr: SocketAddr,
     conn: &quinn::Connection,
-    wire_msg: WireMsg,
+    raw_wire_msg: Bytes,
 ) {
     let leaf = conn
         .open_uni()
@@ -87,25 +88,8 @@ pub fn write_to_peer_connection(
             handle_communication_err(peer_addr, &From::from(e), "Open-Unidirectional")
         })
         .and_then(move |o_stream| {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            // TODO can we do better to not have many daemon threads ? Maybe use one such
-            // background thread ?
-            let _j = unwrap!(thread::Builder::new()
-                .name("Serialisation-thread".to_string())
-                .spawn(move || {
-                    let raw = unwrap!(bincode::serialize(&wire_msg));
-                    if let Err(e) = tx.send(raw) {
-                        println!("Unable to inform the serialised message: {:?}", e);
-                    }
-                }));
-            rx.map_err(move |e| {
-                handle_communication_err(peer_addr, &From::from(e), "Serialisation-rx")
-            })
-            .and_then(move |raw| {
-                tokio::io::write_all(o_stream, raw).map_err(move |e| {
-                    handle_communication_err(peer_addr, &From::from(e), "Write-All")
-                })
-            })
+            tokio::io::write_all(o_stream, raw_wire_msg)
+                .map_err(move |e| handle_communication_err(peer_addr, &From::from(e), "Write-All"))
         })
         .and_then(move |(o_stream, _)| {
             tokio::io::shutdown(o_stream).map_err(move |e| {
@@ -286,7 +270,7 @@ fn handle_rx_cert(peer_addr: SocketAddr, peer_cert_der: Vec<u8>) {
     }
 }
 
-fn handle_user_msg(peer_addr: SocketAddr, event_tx: &Sender<Event>, msg: Vec<u8>) {
+fn handle_user_msg(peer_addr: SocketAddr, event_tx: &Sender<Event>, msg: Bytes) {
     let new_msg = Event::NewMessage { peer_addr, msg };
     if let Err(e) = event_tx.send(new_msg) {
         println!("Could not dispatch incoming user message: {:?}", e);
@@ -295,7 +279,7 @@ fn handle_user_msg(peer_addr: SocketAddr, event_tx: &Sender<Event>, msg: Vec<u8>
 
 fn handle_echo_req(peer_addr: SocketAddr, q_conn: &quinn::Connection) {
     let msg = WireMsg::EndpointEchoResp(peer_addr);
-    write_to_peer_connection(peer_addr, q_conn, msg);
+    write_to_peer_connection(peer_addr, q_conn, msg.into());
 }
 
 fn handle_echo_resp(our_ext_addr: SocketAddr, inform_tx: Option<Sender<SocketAddr>>) {

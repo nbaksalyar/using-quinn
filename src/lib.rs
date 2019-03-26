@@ -1,3 +1,4 @@
+extern crate bytes;
 #[macro_use]
 extern crate quick_error;
 #[macro_use]
@@ -9,7 +10,8 @@ pub use config::{Config, SerialisableCertificate};
 pub use error::Error;
 pub use event::Event;
 
-use crate::wire_msg::WireMsg;
+pub use crate::wire_msg::WireMsg;
+use bytes::Bytes;
 use context::{ctx, ctx_mut, initialise_ctx, Context};
 use event_loop::EventLoop;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -178,9 +180,21 @@ impl Crust {
     /// If the peer is not connected, it will attempt to connect to it first
     /// and then send the message. This can be called multiple times while the peer is still being
     /// connected to - all the sends will be buffered until the peer is connected to.
-    pub fn send(&mut self, peer_info: CrustInfo, msg: Vec<u8>) {
+    pub fn send<B: Into<Bytes>>(&mut self, peer_info: CrustInfo, msg: B) {
+        let msg = msg.into();
         self.el
-            .post(move || communicate::try_write_to_peer(peer_info, WireMsg::UserMsg(msg)));
+            .post(move || communicate::try_write_to_peer(peer_info, WireMsg::UserMsg(msg).into()));
+    }
+
+    /// Send message to peer.
+    ///
+    /// If the peer is not connected, it will attempt to connect to it first
+    /// and then send the message. This can be called multiple times while the peer is still being
+    /// connected to - all the sends will be buffered until the peer is connected to.
+    pub fn send_raw<B: Into<Bytes>>(&mut self, peer_info: CrustInfo, msg: B) {
+        let msg = msg.into();
+        self.el
+            .post(move || communicate::try_write_to_peer(peer_info, msg));
     }
 
     /// Get our connection info to give to others for them to connect to us
@@ -250,7 +264,7 @@ impl Crust {
 
         self.el.post(move || {
             ctx_mut(|c| c.our_ext_addr_tx = Some(tx));
-            communicate::try_write_to_peer(echo_server_info, WireMsg::EndpointEchoReq)
+            communicate::try_write_to_peer(echo_server_info, WireMsg::EndpointEchoReq.into())
         });
 
         Ok(unwrap!(rx.recv()))

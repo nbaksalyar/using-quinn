@@ -1,6 +1,7 @@
 use crate::config::SerialisableCertificate;
 use crate::event::Event;
 use crate::wire_msg::WireMsg;
+use bytes::Bytes;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
@@ -148,7 +149,7 @@ pub enum ToPeer {
     NoConnection,
     Initiated {
         peer_cert_der: Vec<u8>,
-        pending_sends: Vec<WireMsg>,
+        pending_sends: Vec<Bytes>,
     },
     Established {
         peer_cert_der: Vec<u8>,
