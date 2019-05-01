@@ -400,6 +400,7 @@ impl QuicP2p {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connection::{FromPeer, ToPeer};
     use crate::wire_msg::{Handshake, WireMsg};
     use std::collections::HashSet;
     use std::sync::mpsc::{self, TryRecvError};
@@ -590,6 +591,7 @@ mod tests {
         let mut malicious_client = unwrap!(Builder::new(tx1)
             .with_config(Config {
                 our_type: OurType::Node,
+                ip: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                 ..Default::default()
             })
             .build());
@@ -597,6 +599,8 @@ mod tests {
             qp2p0_info.clone().into(),
             WireMsg::Handshake(Handshake::Client),
         );
+
+        let malicious_client_info = unwrap!(malicious_client.our_connection_info());
 
         match rx0.recv() {
             Ok(Event::ConnectedTo {
@@ -610,6 +614,23 @@ mod tests {
             Err(TryRecvError::Empty) => {}
             r => panic!("Unexpected result {:?}", r),
         }
+
+        // Check that both have unchanged `ToPeer`/`FromPeer` types.
+        assert!(unwrap!(malicious_client.connections(move |c| {
+            if let FromPeer::Established { .. } = c[&qp2p0_info.peer_addr].from_peer {
+                true
+            } else {
+                false
+            }
+        })));
+
+        assert!(unwrap!(qp2p0.connections(move |c| {
+            if let ToPeer::Established { .. } = c[&malicious_client_info.peer_addr].to_peer {
+                true
+            } else {
+                false
+            }
+        })));
     }
 
     // Test for the case when we send an extra handshake introducing ourselves as a Node after we already
@@ -624,6 +645,7 @@ mod tests {
         let mut malicious_client = unwrap!(Builder::new(tx1)
             .with_config(Config {
                 our_type: OurType::Client,
+                ip: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                 ..Default::default()
             })
             .build());
@@ -632,6 +654,8 @@ mod tests {
             WireMsg::Handshake(Handshake::Node { cert_der: vec![] }),
         );
 
+        let malicious_client_info = unwrap!(malicious_client.our_connection_info());
+
         match rx0.recv() {
             Ok(Event::ConnectedTo {
                 peer: Peer::Client { .. },
@@ -639,11 +663,28 @@ mod tests {
             r => panic!("Unexpected result {:?}", r),
         }
 
-        // No more messages expected
+        // No more messages expected.
         match rx0.try_recv() {
             Err(TryRecvError::Empty) => {}
             r => panic!("Unexpected result {:?}", r),
         }
+
+        // Check that both have unchanged `ToPeer`/`FromPeer` types.
+        assert!(unwrap!(malicious_client.connections(move |c| {
+            if let FromPeer::NotNeeded = c[&qp2p0_info.peer_addr].from_peer {
+                true
+            } else {
+                false
+            }
+        })));
+
+        assert!(unwrap!(qp2p0.connections(move |c| {
+            if let ToPeer::NotNeeded = c[&malicious_client_info.peer_addr].to_peer {
+                true
+            } else {
+                false
+            }
+        })));
     }
 
     #[test]
