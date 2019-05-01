@@ -93,12 +93,12 @@ impl BootstrapGroupRef {
             mem::replace(&mut group.terminators, Default::default())
         };
 
+        let _ = terminators.remove(&self.peer_addr);
+
         ctx_mut(|c| {
             for (peer_addr, mut terminator) in terminators.drain() {
                 let _ = terminator.try_send(());
-                if peer_addr != self.peer_addr {
-                    let _conn = c.connections.remove(&peer_addr);
-                }
+                let _conn = c.connections.remove(&peer_addr);
             }
         });
     }
