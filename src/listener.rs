@@ -29,10 +29,10 @@ pub fn listen(incoming_connections: quinn::Incoming) {
     current_thread::spawn(leaf);
 }
 
-enum NewConnState {
-    Duplicate(QConn),
-    AlreadyBootstrapped,
-    Nothing(Option<BootstrapGroupRef>),
+enum Action {
+    HandleDuplicate(QConn),
+    HandleAlreadyBootstrapped,
+    Continue(Option<BootstrapGroupRef>),
 }
 
 fn handle_new_conn(
@@ -74,7 +74,7 @@ fn handle_new_conn(
                 // cases
                 let event = if let Some(bootstrap_group_ref) = conn.bootstrap_group_ref.take() {
                     if bootstrap_group_ref.is_bootstrap_successful_yet() {
-                        return NewConnState::AlreadyBootstrapped;
+                        return Action::HandleAlreadyBootstrapped;
                     }
                     bootstrap_group = Some(bootstrap_group_ref);
                     Event::BootstrappedTo { node: node_info }
@@ -92,23 +92,23 @@ fn handle_new_conn(
             } else {
                 None
             };
-            NewConnState::Nothing(bootstrap_group)
+            Action::Continue(bootstrap_group)
         } else {
-            NewConnState::Duplicate(q_conn)
+            Action::HandleDuplicate(q_conn)
         }
     });
 
     match state {
-        NewConnState::Duplicate(_q_conn) => {
+        Action::HandleDuplicate(_q_conn) => {
             debug!("Not allowing duplicate connection from peer: {}", peer_addr);
         }
-        NewConnState::AlreadyBootstrapped => crate::utils::handle_communication_err(
+        Action::HandleAlreadyBootstrapped => crate::utils::handle_communication_err(
             peer_addr,
             &Error::ConnectionCancelled,
             "Connection already bootstrapped",
             None,
         ),
-        NewConnState::Nothing(bootstrap_group) => {
+        Action::Continue(bootstrap_group) => {
             if let Some(bootstrap_group_ref) = bootstrap_group {
                 bootstrap_group_ref.terminate_group(true);
             }

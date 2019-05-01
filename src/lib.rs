@@ -406,7 +406,6 @@ impl QuicP2p {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::{FromPeer, ToPeer};
     use crate::wire_msg::{Handshake, WireMsg};
     use std::collections::HashSet;
     use std::sync::mpsc::{self, TryRecvError};
@@ -623,19 +622,11 @@ mod tests {
 
         // Check that both have unchanged `ToPeer`/`FromPeer` types.
         assert!(unwrap!(malicious_client.connections(move |c| {
-            if let FromPeer::Established { .. } = c[&qp2p0_info.peer_addr].from_peer {
-                true
-            } else {
-                false
-            }
+            c[&qp2p0_info.peer_addr].from_peer.is_established()
         })));
 
         assert!(unwrap!(qp2p0.connections(move |c| {
-            if let ToPeer::Established { .. } = c[&malicious_client_info.peer_addr].to_peer {
-                true
-            } else {
-                false
-            }
+            c[&malicious_client_info.peer_addr].to_peer.is_established()
         })));
     }
 
@@ -677,19 +668,11 @@ mod tests {
 
         // Check that both have unchanged `ToPeer`/`FromPeer` types.
         assert!(unwrap!(malicious_client.connections(move |c| {
-            if let FromPeer::NotNeeded = c[&qp2p0_info.peer_addr].from_peer {
-                true
-            } else {
-                false
-            }
+            c[&qp2p0_info.peer_addr].from_peer.is_not_needed()
         })));
 
         assert!(unwrap!(qp2p0.connections(move |c| {
-            if let ToPeer::NotNeeded = c[&malicious_client_info.peer_addr].to_peer {
-                true
-            } else {
-                false
-            }
+            c[&malicious_client_info.peer_addr].to_peer.is_not_needed()
         })));
     }
 
