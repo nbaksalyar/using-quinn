@@ -7,34 +7,39 @@
 // specific language governing permissions and limitations relating to use of the SAFE Network
 // Software.
 
-use crate::connect;
-use crate::connection::BootstrapGroupMaker;
-use crate::context::ctx;
+use crate::{connect, connection::BootstrapGroupMaker, context::ctx, Token, WireMsg};
+use std::net::SocketAddr;
 
-pub fn start() {
-    let (bootstrap_nodes, event_tx): (Vec<_>, _) = ctx(|c| {
-        (
-            c.bootstrap_cache
-                .peers()
-                .iter()
-                .rev()
-                .chain(c.bootstrap_cache.hard_coded_contacts().iter())
-                .cloned()
-                .collect(),
-            c.event_tx.clone(),
-        )
-    });
+pub fn start(send_after_connect: Option<(WireMsg, Token)>) {
+    let bootstrap_nodes = bootstrap_nodes();
+    let event_tx = ctx(|c| c.event_tx.clone());
 
     let maker = BootstrapGroupMaker::new(event_tx);
     for bootstrap_node in bootstrap_nodes {
-        let _ = connect::connect_to(bootstrap_node, None, Some(&maker));
+        let _ = connect::connect_to(bootstrap_node, send_after_connect.clone(), Some(&maker));
     }
+}
+
+// Return a list of all hardcoded contacts along with the bootstrap cache.
+fn bootstrap_nodes() -> Vec<SocketAddr> {
+    ctx(|c| {
+        c.bootstrap_cache
+            .peers()
+            .iter()
+            .rev()
+            .chain(c.bootstrap_cache.hard_coded_contacts().iter())
+            .cloned()
+            .collect()
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::test_utils::{new_random_qp2p, new_unbounded_channels, EventReceivers};
-    use crate::{Builder, Config, Event, OurType, QuicP2p};
+    use crate::{
+        test_utils::new_random_qp2p,
+        utils::{new_unbounded_channels, EventReceivers},
+        Config, Event, OurType, QuicP2p,
+    };
     use std::collections::{HashSet, VecDeque};
     use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::thread;
@@ -133,16 +138,18 @@ mod tests {
 
         // Waiting for all nodes to start
         let (ev_tx, ev_rx) = new_unbounded_channels();
-        let mut bootstrapping_node = unwrap!(Builder::new(ev_tx)
-            .with_config(Config {
+        let mut bootstrapping_node = unwrap!(QuicP2p::with_config(
+            ev_tx,
+            Some(Config {
                 port: Some(0),
                 ip: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                 hard_coded_contacts,
                 our_type: OurType::Client,
                 ..Default::default()
-            })
-            .with_bootstrap_nodes(bootstrap_cache.clone(), true,)
-            .build());
+            }),
+            bootstrap_cache.clone(),
+            true
+        ));
 
         bootstrapping_node.bootstrap();
 
@@ -176,17 +183,19 @@ mod tests {
         assert!(hcc.insert(bootstrap_ci));
 
         let (ev_tx, ev_rx) = new_unbounded_channels();
-        let mut bootstrap_client = unwrap!(Builder::new(ev_tx)
-            .with_config(Config {
+        let mut bootstrap_client = unwrap!(QuicP2p::with_config(
+            ev_tx,
+            Some(Config {
                 port: Some(0),
                 ip: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                 hard_coded_contacts: hcc,
                 our_type: OurType::Node,
                 idle_timeout_msec: Some(30),
                 ..Default::default()
-            })
-            .with_bootstrap_nodes(Default::default(), true)
-            .build());
+            }),
+            Default::default(),
+            true
+        ));
 
         bootstrap_client.bootstrap();
 
@@ -319,14 +328,17 @@ mod tests {
     ) -> (QuicP2p, EventReceivers) {
         let cached_peers: VecDeque<_> = cached_peers.drain(..).collect();
         let (ev_tx, ev_rx) = new_unbounded_channels();
-        let builder = Builder::new(ev_tx)
-            .with_config(Config {
+        let quic_p2p = unwrap!(QuicP2p::with_config(
+            ev_tx,
+            Some(Config {
                 port: Some(0),
                 ip: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                 ..Default::default()
-            })
-            .with_bootstrap_nodes(cached_peers, true);
-        (unwrap!(builder.build()), ev_rx)
+            }),
+            cached_peers,
+            true
+        ));
+        (quic_p2p, ev_rx)
     }
 
     /// Constructs a `QuicP2p` node with some sane defaults for testing.
@@ -340,16 +352,19 @@ mod tests {
         our_type: OurType,
     ) -> (QuicP2p, EventReceivers) {
         let (ev_tx, ev_rx) = new_unbounded_channels();
-        let builder = Builder::new(ev_tx)
-            .with_config(Config {
+        let quic_p2p = unwrap!(QuicP2p::with_config(
+            ev_tx,
+            Some(Config {
                 port: Some(0),
                 ip: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                 hard_coded_contacts,
                 our_type,
                 ..Default::default()
-            })
+            }),
             // Make sure we start with an empty cache. Otherwise, we might get into unexpected state.
-            .with_bootstrap_nodes(Default::default(), true);
-        (unwrap!(builder.build()), ev_rx)
+            Default::default(),
+            true
+        ));
+        (quic_p2p, ev_rx)
     }
 }

@@ -470,9 +470,8 @@ fn handle_echo_resp(our_ext_addr: SocketAddr, inform_tx: Option<mpsc::Sender<Soc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{
-        new_random_qp2p, new_unbounded_channels, rand_node_addr, test_dirs, write_to_bi_stream,
-    };
+    use crate::test_utils::{new_random_qp2p, rand_node_addr, test_dirs, write_to_bi_stream};
+    use crate::utils::new_unbounded_channels;
     use std::collections::HashSet;
     use unwrap::unwrap;
 

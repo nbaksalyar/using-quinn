@@ -36,7 +36,7 @@ pub fn connect_to(
     let r = ctx_mut(|c| {
         let event_tx = c.event_tx.clone();
 
-        let (terminator, mut rx) = utils::connect_terminator();
+        let (terminator, mut terminator_rx) = utils::connect_terminator();
 
         let conn = c.connections.entry(node_addr).or_insert_with(|| {
             Connection::new(
@@ -80,7 +80,7 @@ pub fn connect_to(
             let _ = tokio::spawn(async move {
                 select! {
                     // Terminator leaf
-                    _ = rx.recv().fuse() => {
+                    _ = terminator_rx.recv().fuse() => {
                         handle_connect_err(node_addr, &QuicP2pError::ConnectionCancelled);
                     },
                     // New connection

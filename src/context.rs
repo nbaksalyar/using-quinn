@@ -78,6 +78,7 @@ where
 /// between calls to poll the event loop for the next event.
 pub struct Context {
     pub event_tx: EventSenders,
+    pub(crate) event_tx_tmp: Option<EventSenders>,
     pub connections: HashMap<SocketAddr, Connection>,
     pub our_ext_addr_tx: Option<mpsc::Sender<SocketAddr>>,
     pub our_complete_cert: SerialisableCertificate,
@@ -101,6 +102,7 @@ impl Context {
     ) -> Self {
         Self {
             event_tx,
+            event_tx_tmp: None,
             connections: Default::default(),
             our_ext_addr_tx: Default::default(),
             our_complete_cert,

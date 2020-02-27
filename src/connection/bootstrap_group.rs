@@ -28,7 +28,7 @@ use std::rc::Rc;
 /// Creator of a `BootstrapGroup`. Use this to obtain the reference to the undelying group.
 ///
 /// Destroy the maker once all references of the group have been obtained to not hold the internal
-/// references for longer than needed. The maker going out of scope is enough for it's destruction.
+/// references for longer than needed. The maker going out of scope is enough for its destruction.
 pub struct BootstrapGroupMaker {
     group: Rc<RefCell<BootstrapGroup>>,
 }

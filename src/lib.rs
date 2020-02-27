@@ -66,10 +66,8 @@ use crossbeam_channel as mpmc;
 use event_loop::EventLoop;
 use futures::future::TryFutureExt;
 use log::{debug, info, warn};
-use std::collections::VecDeque;
-use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
-use std::sync::mpsc;
+use std::{collections::VecDeque, mem, sync::mpsc, time::Duration};
 use unwrap::unwrap;
 
 mod bootstrap;
@@ -96,7 +94,7 @@ mod wire_msg;
 pub const DEFAULT_MAX_ALLOWED_MSG_SIZE: usize = 500 * 1024 * 1024; // 500MiB
 /// In the absence of a port supplied by the user via the config we will first try using this
 /// before using a random port.
-pub const DEFAULT_PORT_TO_TRY: u16 = 443;
+pub const DEFAULT_PORT_TO_TRY: u16 = 12000;
 
 /// Senders for node and client events
 #[derive(Clone)]
@@ -119,65 +117,47 @@ impl EventSenders {
     }
 }
 
-/// Builder for `QuicP2p`. Convenient for setting various parameters and creating `QuicP2p`.
-pub struct Builder {
+/// Main QuicP2p instance to communicate with QuicP2p
+pub struct QuicP2p {
     event_tx: EventSenders,
-    cfg: Option<Config>,
-    bootstrap_nodes: VecDeque<SocketAddr>,
-    use_bootstrap_nodes_exclusively: bool,
+    cfg: Config,
+    us: Option<SocketAddr>,
+    el: EventLoop,
 }
 
-impl Builder {
-    /// New `Builder`
-    pub fn new(event_tx: EventSenders) -> Self {
-        Self {
-            event_tx,
-            cfg: Default::default(),
-            bootstrap_nodes: Default::default(),
-            use_bootstrap_nodes_exclusively: Default::default(),
-        }
+impl QuicP2p {
+    /// Construct `QuicP2p` with the default config.
+    pub fn new(event_tx: EventSenders) -> R<QuicP2p> {
+        Self::with_config(event_tx, None, Default::default(), false)
     }
 
-    /// Take bootstrap nodes from the user.
+    /// Construct `QuicP2p` with supplied parameters, ready to be used.
+    /// If config is not specified it'll call `Config::read_or_construct_default()`
+    ///
+    /// `bootstrap_nodes`: takes bootstrap nodes from the user.
     ///
     /// Either use these exclusively or in addition to the ones read from bootstrap cache file if
     /// such a file exists
-    pub fn with_bootstrap_nodes(
-        mut self,
+    pub fn with_config(
+        event_tx: EventSenders,
+        cfg: Option<Config>,
         bootstrap_nodes: VecDeque<SocketAddr>,
-        use_exclusively: bool,
-    ) -> Self {
-        self.use_bootstrap_nodes_exclusively = use_exclusively;
+        use_bootstrap_nodes_exclusively: bool,
+    ) -> R<QuicP2p> {
+        let el = EventLoop::spawn();
 
-        if use_exclusively {
-            self.bootstrap_nodes = bootstrap_nodes;
-        } else {
-            self.bootstrap_nodes.extend(bootstrap_nodes.into_iter());
-        }
-
-        self
-    }
-
-    /// Configuration for `QuicP2p`.
-    ///
-    /// If not specified it'll call `Config::read_or_construct_default()`
-    pub fn with_config(mut self, cfg: Config) -> Self {
-        self.cfg = Some(cfg);
-        self
-    }
-
-    /// Construct `QuicP2p` with supplied parameters earlier, ready to be used.
-    pub fn build(self) -> R<QuicP2p> {
-        let mut qp2p = if let Some(cfg) = self.cfg {
-            QuicP2p::with_config(self.event_tx, cfg)
-        } else {
-            QuicP2p::new(self.event_tx)?
+        let mut qp2p = Self {
+            event_tx,
+            cfg: if let Some(cfg) = cfg {
+                cfg
+            } else {
+                Config::read_or_construct_default(None)?
+            },
+            us: None,
+            el,
         };
 
-        qp2p.activate()?;
-
-        let use_bootstrap_nodes_exclusively = self.use_bootstrap_nodes_exclusively;
-        let bootstrap_nodes = self.bootstrap_nodes;
+        QuicP2p::activate(&qp2p.event_tx, &mut qp2p.el, &qp2p.cfg)?;
 
         qp2p.el.post(move || {
             ctx_mut(|c| {
@@ -193,17 +173,7 @@ impl Builder {
 
         Ok(qp2p)
     }
-}
 
-/// Main QuicP2p instance to communicate with QuicP2p
-pub struct QuicP2p {
-    event_tx: EventSenders,
-    cfg: Config,
-    us: Option<SocketAddr>,
-    el: EventLoop,
-}
-
-impl QuicP2p {
     /// Bootstrap to the network.
     ///
     /// Bootstrap concept is different from "connect" in several ways: `bootstrap()` will try to
@@ -213,7 +183,7 @@ impl QuicP2p {
     /// In case of success `Event::BootstrapedTo` will be fired. On error quic-p2p will fire `Event::BootstrapFailure`.
     pub fn bootstrap(&mut self) {
         self.el.post(|| {
-            bootstrap::start();
+            bootstrap::start(None);
         })
     }
 
@@ -332,55 +302,28 @@ impl QuicP2p {
         self.cfg.clone()
     }
 
-    fn new(event_tx: EventSenders) -> R<Self> {
-        Ok(Self::with_config(
-            event_tx,
-            Config::read_or_construct_default(None)?,
-        ))
-    }
-
-    fn with_config(event_tx: EventSenders, cfg: Config) -> Self {
-        let el = EventLoop::spawn();
-        Self {
-            event_tx,
-            cfg,
-            us: None,
-            el,
-        }
-    }
-
     /// Must be called only once. There can only be one context per `QuicP2p` instance.
-    fn activate(&mut self) -> R<()> {
-        let (port, is_user_supplied) = self
-            .cfg
+    fn activate(event_tx: &EventSenders, el: &mut EventLoop, cfg: &Config) -> R<()> {
+        let (port, is_user_supplied) = cfg
             .port
             .map(|p| (p, true))
             .unwrap_or((DEFAULT_PORT_TO_TRY, false));
-        let ip = self
-            .cfg
-            .ip
-            .unwrap_or_else(|| IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-        let max_msg_size_allowed = self
-            .cfg
+        let ip = cfg.ip.unwrap_or_else(|| IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        let max_msg_size_allowed = cfg
             .max_msg_size_allowed
             .map(|size| size as usize)
             .unwrap_or(DEFAULT_MAX_ALLOWED_MSG_SIZE);
-        let idle_timeout_msec = self
-            .cfg
-            .idle_timeout_msec
-            .unwrap_or(DEFAULT_IDLE_TIMEOUT_MSEC);
-        let keep_alive_interval_msec = self
-            .cfg
+        let idle_timeout_msec = cfg.idle_timeout_msec.unwrap_or(DEFAULT_IDLE_TIMEOUT_MSEC);
+        let keep_alive_interval_msec = cfg
             .keep_alive_interval_msec
             .unwrap_or(DEFAULT_KEEP_ALIVE_INTERVAL_MSEC);
-        let our_type = self.cfg.our_type;
-        let hard_coded_contacts = self.cfg.hard_coded_contacts.clone();
+        let our_type = cfg.our_type;
+        let hard_coded_contacts = cfg.hard_coded_contacts.clone();
 
-        let tx = self.event_tx.clone();
+        let tx = event_tx.clone();
 
         let ((key, cert), our_complete_cert) = {
-            let our_complete_cert = self
-                .cfg
+            let our_complete_cert = cfg
                 .our_complete_cert
                 .clone()
                 .unwrap_or_else(Default::default);
@@ -389,14 +332,13 @@ impl QuicP2p {
                 our_complete_cert,
             )
         };
-        let custom_dirs = self
-            .cfg
+        let custom_dirs = cfg
             .bootstrap_cache_dir
             .clone()
             .map(|custom_dir| Dirs::Overide(OverRide::new(&custom_dir)));
         let bootstrap_cache = BootstrapCache::new(hard_coded_contacts, custom_dirs.as_ref())?;
 
-        self.el.post(move || {
+        el.post(move || {
             let our_cfg = unwrap!(peer_config::new_our_cfg(
                 idle_timeout_msec,
                 keep_alive_interval_msec,
@@ -451,23 +393,86 @@ impl QuicP2p {
     }
 
     fn query_ip_echo_service(&mut self) -> R<SocketAddr> {
-        // FIXME: For the purpose of simplicity we are asking only one peer just now. In production
-        // ask multiple until one answers OR we exhaust the list
-        let node_addr = if let Some(node_addr) = self.cfg.hard_coded_contacts.iter().next() {
-            *node_addr
-        } else {
+        // Bail out early if we don't have any contacts.
+        if self.cfg.hard_coded_contacts.is_empty() {
             return Err(QuicP2pError::NoEndpointEchoServerFound);
-        };
-        let echo_server = Peer::Node(node_addr);
+        }
 
-        let (tx, rx) = mpsc::channel();
+        // Create a separate event stream for the IP echo request.
+        let (event_tx, event_rx) = utils::new_unbounded_channels();
+        let (echo_resp_tx, echo_resp_rx) = mpsc::channel();
 
-        self.el.post(move || {
-            ctx_mut(|c| c.our_ext_addr_tx = Some(tx));
-            let _ = communicate::try_write_to_peer(echo_server, WireMsg::EndpointEchoReq, 0);
+        let idle_timeout_msec = self
+            .cfg
+            .idle_timeout_msec
+            .unwrap_or(DEFAULT_IDLE_TIMEOUT_MSEC);
+
+        self.el.post({
+            let event_tx = event_tx.clone();
+            move || {
+                ctx_mut(|ctx| {
+                    ctx.our_ext_addr_tx = Some(echo_resp_tx);
+
+                    let orig_event_tx = mem::replace(&mut ctx.event_tx, event_tx);
+                    ctx.event_tx_tmp = Some(orig_event_tx);
+                });
+            }
         });
 
-        Ok(unwrap!(rx.recv()))
+        loop {
+            if self.cfg.hard_coded_contacts.is_empty() {
+                return Err(QuicP2pError::NoEndpointEchoServerFound);
+            }
+
+            self.el
+                .post(|| bootstrap::start(Some((WireMsg::EndpointEchoReq, 0))));
+
+            match event_rx.recv() {
+                Ok(Event::BootstrappedTo { node }) => {
+                    match echo_resp_rx.recv_timeout(Duration::from_millis(idle_timeout_msec)) {
+                        Ok(res) => {
+                            debug!("Found our address: {:?}", res);
+
+                            self.disconnect_from(node);
+
+                            // Wait to be disconnected from the node.
+                            match event_rx.recv() {
+                                Ok(Event::ConnectionFailure {
+                                    peer: Peer::Node(n),
+                                    ..
+                                }) if n == node => {}
+                                x => panic!("Unexpected event {:?}", x),
+                            }
+
+                            // Restore the original event_tx
+                            self.el.post(move || {
+                                ctx_mut(|ctx| {
+                                    ctx.event_tx = ctx
+                                        .event_tx_tmp
+                                        .take()
+                                        .expect("Unexpected: no original event_tx saved");
+                                });
+                            });
+
+                            return Ok(res);
+                        }
+                        Err(_e) => {
+                            // This node hasn't replied in a timely manner, so remove it from
+                            // our bootstrap list and try again.
+                            let _ = self.cfg.hard_coded_contacts.remove(&node);
+
+                            info!(
+                                "Node {} is unresponsive, removing it from bootstrap contacts; {} contacts left",
+                                node,
+				self.cfg.hard_coded_contacts.len()
+                            );
+                        }
+                    }
+                }
+                // Err(e) => QuicP2pError::from(e),
+                x => panic!("Unexpected event {:?}", x),
+            }
+        }
     }
 
     #[inline]
@@ -483,18 +488,30 @@ impl QuicP2p {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::new_unbounded_channels;
     use crate::wire_msg::{Handshake, WireMsg};
     use crossbeam_channel as mpmc;
     use std::collections::HashSet;
     use std::iter;
     use std::time::Duration;
-    use test_utils::{new_random_qp2p, new_unbounded_channels, rand_node_addr};
+    use test_utils::{new_random_qp2p, rand_node_addr};
+
+    // Helper for matching incoming QuicP2P events.
+    macro_rules! expect_event {
+        ($rx:expr, $e:pat => $b:block) => {
+            match $rx.recv() {
+                Ok($e) => $b,
+                Ok(x) => panic!("Expected {} - got {:?}", stringify!($e), x),
+                Err(e) => panic!("Expected {}; got error: {:?} {}", stringify!($e), e, e),
+            }
+        };
+    }
 
     #[ignore] // This fails on fast machines FIXME
     #[test]
     fn dropping_qp2p_handle_gracefully_shutsdown_event_loop() {
         let (tx, _rx) = new_unbounded_channels();
-        let _qp2p = unwrap!(Builder::new(tx).build());
+        let _qp2p = unwrap!(QuicP2p::new(tx));
     }
 
     #[test]
@@ -595,16 +612,27 @@ mod tests {
         let j0 = unwrap!(std::thread::Builder::new()
             .name("QuicP2p0-test-thread".to_string())
             .spawn(move || {
-                match rx0.recv() {
-                    Ok(Event::ConnectedTo {
-                        peer: Peer::Node(node_addr),
-                    }) => assert_eq!(node_addr, qp2p1_addr),
-                    Ok(x) => panic!("Expected Event::ConnectedTo - got {:?}", x),
-                    Err(e) => panic!(
-                        "QuicP2p0 Expected Event::ConnectedTo; got error: {:?} {}",
-                        e, e
-                    ),
-                };
+                // Expect incoming connection for an echo service.
+                expect_event!(rx0, Event::ConnectedTo { peer: Peer::Node(node_addr) } => {
+                    assert_eq!(
+                        node_addr, qp2p1_addr,
+                        "Expected ConnectedTo from {:?}, but {:?} connected instead",
+                        qp2p1_addr, node_addr
+                    )
+                });
+
+                // Expect echo service disconnect.
+                expect_event!(rx0, Event::ConnectionFailure { .. } => {});
+
+                // Expect incoming connection from qp2p1
+                expect_event!(rx0, Event::ConnectedTo { peer: Peer::Node(node_addr) } => {
+                    assert_eq!(
+                        node_addr, qp2p1_addr,
+                        "Expected ConnectedTo from {:?}, but {:?} connected instead",
+                        qp2p1_addr, node_addr
+                    )
+                });
+
                 let mut rxd_sent_msg_event = false;
                 for i in 0..4 {
                     match rx0.recv() {
@@ -645,16 +673,14 @@ mod tests {
         let j1 = unwrap!(std::thread::Builder::new()
             .name("QuicP2p1-test-thread".to_string())
             .spawn(move || {
-                match rx1.recv() {
-                    Ok(Event::ConnectedTo {
-                        peer: Peer::Node(node_addr),
-                    }) => assert_eq!(node_addr, qp2p0_addr),
-                    Ok(x) => panic!("Expected Event::ConnectedTo - got {:?}", x),
-                    Err(e) => panic!(
-                        "QuicP2p1 Expected Event::ConnectedTo; got error: {:?} {}",
-                        e, e
-                    ),
-                };
+                expect_event!(rx1, Event::ConnectedTo { peer: Peer::Node(node_addr) } => {
+                    assert_eq!(
+                        node_addr, qp2p0_addr,
+                        "Expected ConnectedTo from {:?}, but {:?} connected instead",
+                        qp2p0_addr, node_addr
+                    )
+                });
+
                 let mut count_of_rxd_sent_msgs: u8 = 0;
                 for _ in 0..4 {
                 match rx1.recv() {
@@ -704,13 +730,16 @@ mod tests {
         let qp2p0_addr = unwrap!(qp2p0.our_connection_info());
 
         let (tx1, rx1) = new_unbounded_channels();
-        let mut malicious_client = unwrap!(Builder::new(tx1)
-            .with_config(Config {
+        let mut malicious_client = unwrap!(QuicP2p::with_config(
+            tx1,
+            Some(Config {
                 our_type: OurType::Node,
                 ip: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                 ..Default::default()
-            })
-            .build());
+            }),
+            Default::default(),
+            false
+        ));
         malicious_client.send_wire_msg(
             Peer::Node(qp2p0_addr),
             WireMsg::Handshake(Handshake::Client),
@@ -766,13 +795,16 @@ mod tests {
         let qp2p0_addr = unwrap!(qp2p0.our_connection_info());
 
         let (tx1, _rx1) = new_unbounded_channels();
-        let mut malicious_client = unwrap!(Builder::new(tx1)
-            .with_config(Config {
+        let mut malicious_client = unwrap!(QuicP2p::with_config(
+            tx1,
+            Some(Config {
                 our_type: OurType::Client,
                 ip: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                 ..Default::default()
-            })
-            .build());
+            }),
+            Default::default(),
+            false
+        ));
         malicious_client.send_wire_msg(
             Peer::Node(qp2p0_addr),
             WireMsg::Handshake(Handshake::Node),

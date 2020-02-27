@@ -23,7 +23,7 @@ use common::{new_unbounded_channels, EventReceivers, Rpc};
 use crc::crc32;
 use env_logger;
 use log::{debug, error, info, warn};
-use quic_p2p::{Builder, Config, Event, Peer, QuicP2p};
+use quic_p2p::{Config, Event, Peer, QuicP2p};
 use rand::{self, distributions::Standard, seq::IteratorRandom, Rng};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -80,7 +80,12 @@ impl ClientNode {
             .ok_or_else(|| "No valid bootstrap node was provided.".to_string())?;
 
         let (event_tx, event_rx) = new_unbounded_channels();
-        let mut qp2p = unwrap!(Builder::new(event_tx).with_config(config).build());
+        let mut qp2p = unwrap!(QuicP2p::with_config(
+            event_tx,
+            Some(config),
+            Default::default(),
+            false
+        ));
 
         let large_msg = Bytes::from(random_data_with_hash(LARGE_MSG_SIZE));
         assert!(hash_correct(&large_msg));

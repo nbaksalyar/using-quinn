@@ -173,12 +173,12 @@ impl fmt::Debug for SerialisableCertificate {
     }
 }
 
-/// Whether we are a client or a node
+/// Whether we are a client or a node.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, Eq, PartialEq)]
 pub enum OurType {
-    /// We are a client
+    /// We are a client. Clients do not expect a reverse connection from a peer.
     Client,
-    /// We are a node
+    /// We are a node. Nodes require a reverse connection from a peer.
     Node,
 }
 

@@ -17,7 +17,7 @@ use crate::{
 };
 use futures::future::{self, TryFutureExt};
 use futures::stream::StreamExt;
-use log::{debug, info};
+use log::{debug, info, trace};
 
 /// Start listening
 pub fn listen(incoming_connections: quinn::Incoming) {
@@ -54,6 +54,8 @@ fn handle_new_conn(
     let _ = tokio::spawn(driver.map_err(move |e| {
         utils::handle_communication_err(peer_addr, &From::from(e), "Driver failed", None);
     }));
+
+    trace!("Incoming connection from peer: {}", peer_addr);
 
     let state = ctx_mut(|c| {
         let event_tx = c.event_tx.clone();
